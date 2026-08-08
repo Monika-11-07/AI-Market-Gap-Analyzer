@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { analyzeIdea, mergeProductInsights } = require('./analysisService');
+const { analyzeIdea, mergeProductInsights, buildFallbackReport } = require('./analysisService');
 
 test('analyzeIdea returns a structured market report from conversation messages', async () => {
     const messages = [
@@ -34,5 +34,17 @@ test('mergeProductInsights enriches the report with Product Hunt data', () => {
     });
 
     assert.ok(report.competitors.includes('ChefOps'));
-    assert.ok(report.marketGaps.includes('Opportunity to differentiate with deeper restaurant-specific workflows'));
+    assert.ok(report.marketGaps.includes('Opportunity to differentiate with a workflow designed for the target user'));
+});
+
+test('fallback analysis uses the latest product discussed in the chat', () => {
+    const report = buildFallbackReport([
+        { sender: 'user', text: 'I want to build an AI restaurant booking app.' },
+        { sender: 'bot', text: 'Who are the target users?' },
+        { sender: 'user', text: 'Actually, my product is an AI note taking app for students.' }
+    ]);
+
+    assert.ok(report.competitors.includes('Notion'));
+    assert.ok(!report.competitors.includes('OpenTable'));
+    assert.ok(report.competitors.length >= 7);
 });

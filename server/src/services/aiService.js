@@ -40,13 +40,21 @@ Rules:
 `;
 }
 
-async function generateResponse(messages) {
-
-    const models = [
-        "inclusionai/ling-3.0-flash:free",
-        "nvidia/nemotron-3-super:free",
-        "nvidia/nemotron-3-ultra-550b-a55b:free"
+function getModelCandidates() {
+    const configuredModel = process.env.OPENROUTER_MODEL
+        ?.trim()
+        .replace(/^['"]|['"]$/g, "");
+    const freeModels = [
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "inclusionai/ling-3.0-tiny:free"
     ];
+
+    return [...new Set([configuredModel, ...freeModels].filter(Boolean))];
+}
+
+async function generateResponse(messages) {
+    const models = getModelCandidates();
 
     let lastError;
 
@@ -98,5 +106,6 @@ async function generateResponse(messages) {
 
 module.exports = {
     generateResponse,
-    buildSystemPrompt
+    buildSystemPrompt,
+    getModelCandidates
 };

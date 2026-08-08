@@ -1,5 +1,6 @@
 const OpenAI = require("openai");
 const { searchProducts } = require("./productHuntService");
+const { getModelCandidates } = require("./aiService");
 
 let client = null;
 
@@ -19,10 +20,18 @@ function getClient() {
 }
 
 function buildFallbackReport(messages = []) {
-    const text = (messages || [])
-        .map((msg) => `${msg.sender}: ${msg.text}`)
-        .join("\n")
-        .toLowerCase();
+    const userMessages = (messages || [])
+        .filter((msg) => msg.sender === "user")
+        .map((msg) => msg.text || "");
+    const productConversation = [...userMessages]
+        .reverse()
+        .find((message) => /\b(build|create|develop|launch|product|app|idea|tool|platform)\b/i.test(message))
+        || userMessages[userMessages.length - 1]
+        || "";
+    const text = productConversation.toLowerCase();
+    const productIdea = productConversation.match(/(?:build|create|develop|launch|product|app|idea)\D{0,20}([A-Za-z0-9][A-Za-z0-9 -]{2,60})/i)?.[1]?.trim()
+        || productConversation.split(/[.!?]/)[0]?.trim()
+        || "the proposed product";
 
     const hasAi = text.includes("ai") || text.includes("artificial intelligence");
     const hasSaaS = text.includes("saas") || text.includes("software");
@@ -38,17 +47,46 @@ function buildFallbackReport(messages = []) {
 
     opportunityScore = Math.min(95, Math.max(45, opportunityScore));
 
-    const competitors = [
-        "Established vertical SaaS platforms",
-        "General-purpose productivity tools",
-        "Manual spreadsheet or CRM workflows"
-    ];
+    const category = text.includes("note") || text.includes("lecture") || text.includes("study")
+        ? "notes and productivity"
+        : text.includes("fitness") || text.includes("workout") || text.includes("health")
+            ? "health and fitness"
+            : text.includes("shop") || text.includes("store") || text.includes("ecommerce")
+                ? "commerce"
+                : text.includes("finance") || text.includes("budget") || text.includes("payment")
+                    ? "financial tools"
+                    : text.includes("restaurant") || text.includes("food")
+                        ? "restaurant technology"
+                        : "the target market";
 
-    const marketGaps = [
-        "Clear niche positioning for the target customer",
-        "A stronger onboarding experience for non-technical users",
-        "A more compelling workflow automation story"
-    ];
+    const categoryInsights = {
+        "notes and productivity": {
+            competitors: ["Notion", "OneNote", "Otter.ai", "Google Keep", "Evernote", "Quizlet", "Manual review of recordings and PDFs"],
+            gaps: ["Reliable synthesis instead of raw transcripts", "Fast conversion of notes into exam-ready summaries", "Shared workspaces with version-aware collaboration"]
+        },
+        "health and fitness": {
+            competitors: ["MyFitnessPal", "Fitbit", "Apple Health", "Strava", "Peloton", "Personal trainers and coaching programs", "Spreadsheet-based progress tracking"],
+            gaps: ["Personalized guidance that adapts to progress", "Low-friction daily engagement", "Trustworthy outcomes for the target user"]
+        },
+        commerce: {
+            competitors: ["Shopify", "WooCommerce", "Amazon Marketplace", "Etsy", "BigCommerce", "Marketplace storefronts", "Manual catalog and customer workflows"],
+            gaps: ["A focused experience for the target customer", "Better discovery and conversion signals", "Simple operations for smaller sellers"]
+        },
+        "financial tools": {
+            competitors: ["Mint alternatives", "YNAB", "Monarch Money", "Rocket Money", "Traditional banking apps", "Budgeting platforms", "Manual spreadsheets and calculators"],
+            gaps: ["Clear guidance for the target financial decision", "Trustworthy, understandable recommendations", "A simpler workflow than existing finance tools"]
+        },
+        "restaurant technology": {
+            competitors: ["OpenTable", "Toast", "Square", "Resy", "SevenRooms", "Point-of-sale software", "Manual booking and customer workflows"],
+            gaps: ["Better support for independent operators", "Fewer steps in daily restaurant workflows", "Actionable insights from customer and booking data"]
+        }
+    }[category] || {
+        competitors: [`Existing ${category} platforms`, `Leading ${category} startups`, "General-purpose productivity tools", "Specialist workflow platforms", "Marketplace alternatives", "Manual workflows and spreadsheets"],
+        gaps: [`Sharper positioning for ${productIdea}`, "A simpler first-use experience", `A measurable advantage over current ${category} solutions`]
+    };
+
+    const competitors = categoryInsights.competitors;
+    const marketGaps = categoryInsights.gaps;
 
     const verdict = opportunityScore >= 75
         ? "Strong opportunity with a clear niche and room for differentiation."
@@ -60,15 +98,15 @@ function buildFallbackReport(messages = []) {
         competitors,
         marketGaps,
         swot: {
-            strengths: ["Problem-driven positioning", "Clear AI angle", "Good fit for workflow automation"],
-            weaknesses: ["Needs stronger differentiation", "Requires early user validation"],
-            opportunities: ["Rising AI adoption", "Under-served niche segments"],
-            threats: ["Fast-moving competitors", "Potential pricing pressure"]
+            strengths: [`Addresses a specific ${category} problem`, hasAi ? "Clear AI-enabled value" : "A focused product concept", "Potential to remove friction from the current workflow"],
+            weaknesses: ["Needs stronger differentiation", `Requires validation with ${category} users`],
+            opportunities: [`Growing demand in ${category}`, `Room to improve the experience of ${productIdea}`],
+            threats: ["Fast-moving competitors", "Low switching costs for existing alternatives"]
         },
         roadmap: [
-            "Validate the problem with 5-10 target users",
-            "Build a simple MVP around one core workflow",
-            "Measure retention and upgrade willingness before scaling"
+            `Validate the problem with 5-10 ${category} users`,
+            `Build a simple MVP around ${productIdea}`,
+            "Measure retention and willingness to pay before scaling"
         ]
     };
 }
@@ -82,7 +120,7 @@ function mergeProductInsights(report, productData) {
     const mergedCompetitors = Array.from(new Set([...(report.competitors || []), ...products]));
     const mergedGaps = Array.from(new Set([
         ...(report.marketGaps || []),
-        "Opportunity to differentiate with deeper restaurant-specific workflows"
+        "Opportunity to differentiate with a workflow designed for the target user"
     ]));
 
     return {
@@ -94,10 +132,13 @@ function mergeProductInsights(report, productData) {
 
 async function analyzeIdea(messages) {
     const fallbackReport = buildFallbackReport(messages);
+    const productInsightsPromise = process.env.PRODUCT_HUNT_API_TOKEN
+        ? searchProducts("AI").catch(() => null)
+        : Promise.resolve(null);
 
     if (!process.env.OPENROUTER_API_KEY) {
         try {
-            const productData = await searchProducts("AI");
+            const productData = await productInsightsPromise;
             return mergeProductInsights(fallbackReport, productData);
         } catch (error) {
             return fallbackReport;
@@ -111,24 +152,41 @@ async function analyzeIdea(messages) {
             return fallbackReport;
         }
 
-        const completion = await activeClient.chat.completions.create({
-            model: process.env.OPENROUTER_MODEL || "inclusionai/ling-3.0-flash:free",
-            messages: [
-                {
-                    role: "system",
-                    content: "You are a startup market analyst. Return a compact JSON object with opportunityScore (number), verdict (string), competitors (array of strings), marketGaps (array of strings), swot (object with strengths, weaknesses, opportunities, threats arrays), and roadmap (array of strings)."
-                },
-                {
-                    role: "user",
-                    content: `Analyze this startup conversation and return only valid JSON.\n${(messages || []).map((msg) => `${msg.sender}: ${msg.text}`).join("\n")}`
-                }
-            ]
-        });
+        let completion;
+        let lastError;
+        const analysisMessages = [
+            {
+                role: "system",
+                content: "You are a startup market analyst. Analyze the latest product explicitly discussed by the user; if the user changed products, ignore earlier product ideas. Return a compact JSON object with opportunityScore (number), verdict (string), competitors (array of at least 7 specific relevant companies or alternatives), marketGaps (array of strings), swot (object with strengths, weaknesses, opportunities, threats arrays), and roadmap (array of strings)."
+            },
+            {
+                role: "user",
+                content: `Analyze this startup conversation and return only valid JSON.\n${(messages || []).map((msg) => `${msg.sender}: ${msg.text}`).join("\n")}`
+            }
+        ];
+
+        for (const model of getModelCandidates()) {
+            try {
+                completion = await activeClient.chat.completions.create({
+                    model,
+                    messages: analysisMessages
+                });
+                break;
+            } catch (error) {
+                lastError = error;
+                console.warn(`AI analysis model failed: ${model}`, error.message);
+            }
+        }
+
+        if (!completion) {
+            throw lastError || new Error("No AI model was available");
+        }
 
         const content = completion?.choices?.[0]?.message?.content || "{}";
         const cleaned = content.replace(/```json|```/g, "").trim();
         const parsed = JSON.parse(cleaned);
 
+        const productData = await productInsightsPromise;
         const enriched = mergeProductInsights({
             ...fallbackReport,
             ...parsed,
@@ -137,7 +195,7 @@ async function analyzeIdea(messages) {
             marketGaps: Array.isArray(parsed.marketGaps) ? parsed.marketGaps : fallbackReport.marketGaps,
             swot: parsed.swot && typeof parsed.swot === "object" ? parsed.swot : fallbackReport.swot,
             roadmap: Array.isArray(parsed.roadmap) ? parsed.roadmap : fallbackReport.roadmap
-        }, await searchProducts("AI"));
+        }, productData);
 
         return enriched;
     } catch (error) {
@@ -148,5 +206,6 @@ async function analyzeIdea(messages) {
 
 module.exports = {
     analyzeIdea,
-    mergeProductInsights
+    mergeProductInsights,
+    buildFallbackReport
 };
