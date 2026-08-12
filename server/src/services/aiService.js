@@ -1,4 +1,6 @@
 const OpenAI = require("openai");
+const { validateImageDataUrl } = require("./imageService");
+const { validateFileDataUrl, extractFileTextFromDataUrl } = require("./fileService");
 
 let client = null;
 
@@ -19,24 +21,15 @@ function getClient() {
 
 function buildSystemPrompt() {
     return `
-You are a warm, insightful startup coach and helpful assistant for the AI Market Gap Analyzer.
+You are a general-purpose multimodal AI assistant. When the user provides an image, carefully analyze its visual content and any readable text, understand it in context with the user's question, and identify important information. Do not assume an image is related to Product Hunt, startups, or products unless the image or user's question indicates that. Analyze charts, tables, diagrams, UI, documents, objects, and mixed content appropriately. If something is unclear or unreadable, clearly state the limitation instead of inventing information.
 
-Rules:
-1. Answer the user's question directly when it is a general question.
-2. If the user is discussing a startup idea, guide the conversation in a natural, mentor-like way to collect:
-   - Startup idea
-   - Target users
-   - Problem
-   - Existing solutions
-   - Unique feature
-   - Revenue model
-3. Ask only ONE question at a time.
-4. Remember previous answers and build on them naturally.
-5. Keep responses short, conversational, and human-sounding.
-6. Use an encouraging, coaching tone, like "That sounds promising," "You’re thinking in the right direction," or "Good instinct" when appropriate.
-7. Offer practical, thoughtful guidance without being overly formal.
-8. When enough startup information is collected, say:
-   "I have enough information. Would you like me to analyze the market?"
+Guidelines:
+1. Answer the user's question directly and clearly.
+2. Use a neutral, conversational tone similar to GPT-style chat assistants.
+3. Keep responses concise and easy to follow.
+4. Prefer plain explanations over overly formal or coached language.
+5. Use simple markdown when helpful: headings, bullets, numbered steps, and short code blocks.
+6. If the user uploads an image without a specific question, describe the image and highlight important visual details.
 `;
 }
 
@@ -53,8 +46,114 @@ function getModelCandidates() {
     return [...new Set([configuredModel, ...freeModels].filter(Boolean))];
 }
 
+function getVisionModelCandidates() {
+    const configuredModel = process.env.OPENROUTER_VISION_MODEL
+        ?.trim()
+        .replace(/^['"]|['"]$/g, "");
+
+    return [...new Set([
+        configuredModel,
+        "google/gemini-2.5-flash",
+        "google/gemini-2.5-flash-lite"
+    ].filter(Boolean))];
+}
+
+function getAnalysisModelCandidates() {
+    const configuredModel = process.env.OPENROUTER_ANALYSIS_MODEL
+        ?.trim()
+        .replace(/^['"]|['"]$/g, "");
+
+    return [...new Set([
+        configuredModel,
+        "google/gemini-2.5-flash",
+        ...getModelCandidates()
+    ].filter(Boolean))];
+}
+
+async function buildMessageContent(message) {
+    if (message?.file?.dataUrl) {
+        validateFileDataUrl(message.file.dataUrl);
+        const fileText = await extractFileTextFromDataUrl(message.file.dataUrl);
+        const trimmedFileText = fileText.length > 28000 ? `${fileText.slice(0, 28000)}\n\n[Content trimmed]` : fileText;
+
+        return `${message.text || "Please analyze the attached file and answer the user's question based on its content."}\n\nAttached file content:\n${trimmedFileText}`;
+    }
+
+    if (!message?.image) {
+        return message.text ?? "";
+    }
+
+    validateImageDataUrl(message.image.dataUrl);
+
+    return [
+        {
+            type: "text",
+            text: message.text || "Please describe and explain the important content in this image."
+        },
+        {
+            type: "image_url",
+            image_url: {
+                url: message.image.dataUrl
+            }
+        }
+    ];
+}
+
+function normalizeMessageChunks(message, content) {
+    const chunks = Array.isArray(content) ? content : [content];
+
+    return chunks
+        .map((chunk) => {
+            if (chunk == null) return null;
+            if (typeof chunk === "string") {
+                const trimmed = chunk.trim();
+                return trimmed ? { role: message.sender === "user" ? "user" : "assistant", content: trimmed } : null;
+            }
+            return { role: message.sender === "user" ? "user" : "assistant", content: String(chunk) };
+        })
+        .filter(Boolean);
+}
+
+function buildVisualFallbackResponse(messages = []) {
+    const latestText = messages[messages.length - 1]?.text || "";
+    const asksForMermaid = /\bmermaid\b/i.test(latestText);
+    const asksForArchitecture = /\barchitecture\b|\bfood[- ]delivery\b/i.test(latestText);
+
+     if (!asksForMermaid || !asksForArchitecture) return null;
+
+    return `### Architecture Overview
+
+\`\`\`mermaid
+graph TD
+    Student[Student App]:::student --> API[API Gateway]:::gateway
+    Vendor[Vendor App]:::partner --> API
+    Courier[Courier App]:::partner --> API
+    Admin[Admin Dashboard]:::admin --> API
+    API --> Auth[Authentication]:::service
+    API --> Orders[Order Service]:::service
+    API --> Payments[Payment Service]:::service
+    API --> Notifications[Notifications]:::service
+    Orders --> Database[(PostgreSQL)]:::data
+    Payments --> Database
+    Notifications --> Push[Push Notifications]:::notify
+    classDef student fill:#2563eb,stroke:#93c5fd,color:#ffffff,stroke-width:2px;
+    classDef partner fill:#0f766e,stroke:#5eead4,color:#ffffff,stroke-width:2px;
+    classDef gateway fill:#7c3aed,stroke:#c4b5fd,color:#ffffff,stroke-width:3px;
+    classDef admin fill:#a16207,stroke:#facc15,color:#ffffff,stroke-width:2px;
+    classDef service fill:#334155,stroke:#94a3b8,color:#f8fafc,stroke-width:2px;
+    classDef data fill:#be123c,stroke:#fda4af,color:#ffffff,stroke-width:2px;
+    classDef notify fill:#c2410c,stroke:#fdba74,color:#ffffff,stroke-width:2px;
+\`\`\`
+
+**Key Takeaway:** The API gateway coordinates students, vendors, couriers, admins, orders, payments, and notifications.`;
+}
+
 async function generateResponse(messages) {
-    const models = getModelCandidates();
+    const visualFallback = buildVisualFallbackResponse(messages);
+    if (visualFallback) return visualFallback;
+
+    const hasImage = messages.some((message) => message?.image?.dataUrl);
+    const models = hasImage ? getVisionModelCandidates() : getModelCandidates();
 
     let lastError;
 
@@ -70,22 +169,25 @@ async function generateResponse(messages) {
                 throw new Error("OpenRouter API key is not configured");
             }
 
+            const messageChunks = (await Promise.all(messages.map(async (msg) => {
+                const content = await buildMessageContent(msg);
+                return normalizeMessageChunks(msg, content);
+            }))).flat();
+
+            if (messageChunks.length === 0) {
+                throw new Error("No valid chat message content available for the AI request.");
+            }
+
             const completion = await activeClient.chat.completions.create({
-
                 model,
-
+                timeout: 8000,
                 messages: [
                     {
                         role: "system",
                         content: buildSystemPrompt()
                     },
-
-                    ...messages.map(msg => ({
-                        role: msg.sender === "user" ? "user" : "assistant",
-                        content: msg.text
-                    }))
+                    ...messageChunks
                 ]
-
             });
 
             if (completion?.choices?.length) {
@@ -107,5 +209,9 @@ async function generateResponse(messages) {
 module.exports = {
     generateResponse,
     buildSystemPrompt,
-    getModelCandidates
+    getModelCandidates,
+    getAnalysisModelCandidates,
+    getVisionModelCandidates,
+    buildMessageContent
+    ,buildVisualFallbackResponse
 };

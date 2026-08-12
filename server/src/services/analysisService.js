@@ -1,6 +1,6 @@
 const OpenAI = require("openai");
 const { searchProducts } = require("./productHuntService");
-const { getModelCandidates } = require("./aiService");
+const { getAnalysisModelCandidates } = require("./aiService");
 
 let client = null;
 
@@ -17,6 +17,45 @@ function getClient() {
     }
 
     return client;
+}
+
+function normalizeOpportunityScore(value, fallbackScore = 0) {
+    if (value == null || value === "") {
+        return fallbackScore;
+    }
+
+    let numeric = Number(value);
+
+    if (Number.isNaN(numeric)) {
+        const ratioMatch = String(value).match(/(-?[0-9]+(?:\.[0-9]+)?)\s*(?:\/|of)\s*([0-9]+(?:\.[0-9]+)?)/i);
+        if (ratioMatch) {
+            const numerator = Number(ratioMatch[1]);
+            const denominator = Number(ratioMatch[2]);
+            if (!Number.isNaN(numerator) && !Number.isNaN(denominator) && denominator > 0) {
+                numeric = (numerator / denominator) * 100;
+            }
+        }
+    }
+
+    if (Number.isNaN(numeric)) {
+        const percentMatch = String(value).match(/(-?[0-9]+(?:\.[0-9]+)?)\s*%/);
+        if (percentMatch) {
+            numeric = Number(percentMatch[1]);
+        }
+    }
+
+    if (Number.isNaN(numeric)) {
+        return fallbackScore;
+    }
+
+    if (numeric >= 0 && numeric <= 10) {
+        numeric = numeric * 10;
+    }
+
+    numeric = Math.round(numeric);
+    numeric = Math.min(100, Math.max(0, numeric));
+
+    return numeric;
 }
 
 function buildFallbackReport(messages = []) {
@@ -165,11 +204,12 @@ async function analyzeIdea(messages) {
             }
         ];
 
-        for (const model of getModelCandidates()) {
+        for (const model of getAnalysisModelCandidates()) {
             try {
                 completion = await activeClient.chat.completions.create({
                     model,
-                    messages: analysisMessages
+                    messages: analysisMessages,
+                    timeout: 10000
                 });
                 break;
             } catch (error) {
@@ -186,11 +226,14 @@ async function analyzeIdea(messages) {
         const cleaned = content.replace(/```json|```/g, "").trim();
         const parsed = JSON.parse(cleaned);
 
-        const productData = await productInsightsPromise;
+        const productData = await Promise.race([
+            productInsightsPromise,
+            new Promise((resolve) => setTimeout(() => resolve(null), 2000))
+        ]);
         const enriched = mergeProductInsights({
             ...fallbackReport,
             ...parsed,
-            opportunityScore: Number(parsed.opportunityScore ?? fallbackReport.opportunityScore),
+            opportunityScore: normalizeOpportunityScore(parsed.opportunityScore, fallbackReport.opportunityScore),
             competitors: Array.isArray(parsed.competitors) ? parsed.competitors : fallbackReport.competitors,
             marketGaps: Array.isArray(parsed.marketGaps) ? parsed.marketGaps : fallbackReport.marketGaps,
             swot: parsed.swot && typeof parsed.swot === "object" ? parsed.swot : fallbackReport.swot,
@@ -207,5 +250,6 @@ async function analyzeIdea(messages) {
 module.exports = {
     analyzeIdea,
     mergeProductInsights,
-    buildFallbackReport
+    buildFallbackReport,
+    normalizeOpportunityScore
 };

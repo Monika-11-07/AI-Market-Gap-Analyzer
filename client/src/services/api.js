@@ -1,13 +1,32 @@
 import axios from "axios";
 
 const API = axios.create({
-    baseURL: "http://localhost:5000"
+    baseURL: "http://127.0.0.1:5000"
 });
 
+function prepareMessagesForRequest(messages) {
+    const lastAttachmentIndex = messages
+        .map((message, index) => (
+            message?.image?.dataUrl || message?.file?.dataUrl ? index : -1
+        ))
+        .filter((index) => index >= 0)
+        .pop();
+
+    return messages.map((message, index) => {
+        if (index === lastAttachmentIndex) {
+            return message;
+        }
+
+        return { ...message, image: undefined, file: undefined };
+    });
+}
+
 export const sendMessage = (sessionId, messages) => {
+    const requestMessages = prepareMessagesForRequest(messages);
+
     return API.post("/api/chat", {
         sessionId,
-        messages
+        messages: requestMessages
     });
 };
 

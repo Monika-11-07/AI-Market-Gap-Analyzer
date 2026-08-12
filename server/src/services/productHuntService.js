@@ -37,7 +37,7 @@ async function searchProducts(keyword) {
                     Authorization: `Bearer ${process.env.PRODUCT_HUNT_API_TOKEN}`,
                     "Content-Type": "application/json"
                 },
-                timeout: 5000
+                timeout: 2000
             }
 
         );

@@ -48,3 +48,15 @@ test('fallback analysis uses the latest product discussed in the chat', () => {
     assert.ok(!report.competitors.includes('OpenTable'));
     assert.ok(report.competitors.length >= 7);
 });
+
+test('normalizeOpportunityScore converts 10-point scores to 100 and percent/rationals correctly', () => {
+    const { normalizeOpportunityScore } = require('./analysisService');
+
+    assert.equal(normalizeOpportunityScore(8), 80);
+    assert.equal(normalizeOpportunityScore('8'), 80);
+    assert.equal(normalizeOpportunityScore('8/10'), 80);
+    assert.equal(normalizeOpportunityScore('8 of 10'), 80);
+    assert.equal(normalizeOpportunityScore('75%'), 75);
+    assert.equal(normalizeOpportunityScore('85/100'), 85);
+    assert.equal(normalizeOpportunityScore('7.5/10'), 75);
+});

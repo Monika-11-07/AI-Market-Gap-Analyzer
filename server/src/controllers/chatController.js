@@ -1,5 +1,7 @@
 const { generateResponse } = require("../services/aiService");
 const Conversation = require("../models/Conversation");
+const { validateImageDataUrl } = require("../services/imageService");
+const { validateFileDataUrl } = require("../services/fileService");
 
 const chat = async (req, res) => {
     try {
@@ -18,12 +20,29 @@ const chat = async (req, res) => {
             });
         }
 
+        try {
+            for (const message of messages) {
+                if (message?.image?.dataUrl) {
+                    validateImageDataUrl(message.image.dataUrl);
+                }
+                if (message?.file?.dataUrl) {
+                    validateFileDataUrl(message.file.dataUrl);
+                }
+            }
+        } catch (error) {
+            return res.status(400).json({ error: error.message });
+        }
+
         // Generate AI response
         const reply = await generateResponse(messages);
 
         // Add AI response to conversation
         const updatedMessages = [
-            ...messages,
+            ...messages.map(({ sender, text, image }) => ({
+                sender,
+                text: text || (image ? "[Image attachment]" : ""),
+                ...(image ? { hasImage: true } : {})
+            })),
             {
                 sender: "bot",
                 text: reply
