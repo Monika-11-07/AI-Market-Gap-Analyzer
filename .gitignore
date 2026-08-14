@@ -11,6 +11,25 @@ coverage/
 .env.*
 !.env.example
 
+# Secrets and private keys
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.asc
+secrets.*
+credentials.*
+*.secret
+*.secrets
+
+# Local data and uploads
+uploads/
+tmp/
+temp/
+
 # Logs and debug output
 *.log
 npm-debug.log*
