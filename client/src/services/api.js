@@ -1,7 +1,10 @@
 import axios from "axios";
 
+const rawApiUrl = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const baseURL = rawApiUrl.endsWith("/") ? rawApiUrl.slice(0, -1) : rawApiUrl;
+
 const API = axios.create({
-    baseURL: "http://127.0.0.1:5000"
+    baseURL
 });
 
 function prepareMessagesForRequest(messages) {

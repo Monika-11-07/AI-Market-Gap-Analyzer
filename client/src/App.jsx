@@ -490,7 +490,7 @@ function App() {
                 ...updatedMessages,
                 {
                     sender: "bot",
-                    text: error.response?.data?.error || "Sorry, the message could not be processed."
+                    text: error.response?.data?.error || error.message || "Sorry, the message could not be processed."
                 }
             ]);
 
